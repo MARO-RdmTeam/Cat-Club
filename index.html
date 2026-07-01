@@ -114,7 +114,18 @@
       <div class="ok" id="adminOk"></div>
       <div class="addRow">
         <input type="text" id="newEmailPrefix" placeholder="اسم الإيميل (قبل @catclub)">
-        <button onclick="addEmail()" id="addEmailBtn">إضافة + توليد باسورد</button>
+      </div>
+      <div class="addRow" id="pwModeRow">
+        <label style="display:flex; align-items:center; gap:6px; font-size:13px; color:#cbb9ff; width:auto; white-space:nowrap;">
+          <input type="radio" name="pwMode" value="auto" checked onchange="togglePwMode()" style="width:auto; margin:0;"> باسورد عشوائي
+        </label>
+        <label style="display:flex; align-items:center; gap:6px; font-size:13px; color:#cbb9ff; width:auto; white-space:nowrap;">
+          <input type="radio" name="pwMode" value="manual" onchange="togglePwMode()" style="width:auto; margin:0;"> أنا هكتبه
+        </label>
+      </div>
+      <div class="addRow">
+        <input type="text" id="manualPassword" placeholder="اكتب الباسورد هنا" style="display:none;">
+        <button onclick="addEmail()" id="addEmailBtn">إضافة</button>
       </div>
       <table id="usersTable">
         <thead><tr><th>الإيميل</th><th>الباسورد</th><th></th></tr></thead>
@@ -225,6 +236,7 @@ window.handleLogin = async function() {
       return;
     }
     currentUser = email;
+    localStorage.setItem('catclub_session', email);
     enterChat();
   } catch (e) {
     console.error(e);
@@ -305,6 +317,11 @@ function renderUsersTable(users) {
   });
 }
 
+window.togglePwMode = function() {
+  const manual = document.querySelector('input[name="pwMode"]:checked').value === 'manual';
+  document.getElementById('manualPassword').style.display = manual ? 'block' : 'none';
+};
+
 window.addEmail = async function() {
   const errorEl = document.getElementById('adminError');
   const okEl = document.getElementById('adminOk');
@@ -336,9 +353,25 @@ window.addEmail = async function() {
       return;
     }
 
-    const password = generatePassword(10);
+    const pwMode = document.querySelector('input[name="pwMode"]:checked').value;
+    let password;
+    if (pwMode === 'manual') {
+      password = document.getElementById('manualPassword').value.trim();
+      if (!password) {
+        errorEl.textContent = 'اكتب الباسورد أو اختار "باسورد عشوائي"';
+        return;
+      }
+      if (password.length < 4) {
+        errorEl.textContent = 'الباسورد لازم يكون 4 حروف/أرقام على الأقل';
+        return;
+      }
+    } else {
+      password = generatePassword(10);
+    }
+
     await setUser(email, { password: password, createdAt: Date.now() });
     prefixInput.value = '';
+    document.getElementById('manualPassword').value = '';
     okEl.textContent = 'تم إضافة ' + email + ' — باسوردها: ' + password;
     loadUsersTable();
   } catch (e) {
@@ -368,6 +401,7 @@ function enterChat() {
 
 window.logout = function() {
   currentUser = null;
+  localStorage.removeItem('catclub_session');
   if (unsubscribeMessages) unsubscribeMessages();
   document.getElementById('chatScreen').style.display = 'none';
   document.getElementById('loginScreen').style.display = 'block';
@@ -375,6 +409,24 @@ window.logout = function() {
   document.getElementById('password').value = '';
   document.getElementById('loginError').textContent = '';
 };
+
+// ---------- Auto-restore session on page load ----------
+async function tryRestoreSession() {
+  const savedEmail = localStorage.getItem('catclub_session');
+  if (!savedEmail) return;
+  try {
+    const record = await getUser(savedEmail);
+    if (record) {
+      currentUser = savedEmail;
+      enterChat();
+    } else {
+      localStorage.removeItem('catclub_session');
+    }
+  } catch (e) {
+    console.error('session restore error', e);
+  }
+}
+tryRestoreSession();
 
 function listenMessages() {
   const q = query(collection(db, "messages"), orderBy("time", "asc"), limit(200));
