@@ -41,15 +41,11 @@
   }
   button:hover { opacity: 0.9; transform: translateY(-1px); }
   button:disabled { opacity: 0.6; cursor: not-allowed; }
-  .ghostBtn {
-    background: transparent; border: 1px solid rgba(255,255,255,0.25); color: #fff; margin-top: 10px;
-  }
   .error { color: #ff8585; font-size: 13px; text-align: center; margin-bottom: 10px; min-height: 16px; }
   .ok { color: #8aff9e; font-size: 13px; text-align: center; margin-bottom: 10px; min-height: 16px; }
   .linkLine { text-align:center; font-size: 12px; color:#cbb9ff; margin-top: 16px; }
   .linkLine a { color: #ff9472; cursor: pointer; text-decoration: underline; }
 
-  /* Chat screen */
   #chatScreen { display:none; width:100%; max-width: 480px; height: 80vh; }
   .chatBox {
     background: rgba(20,10,40,0.9); border-radius: 18px; border: 1px solid rgba(255,255,255,0.15);
@@ -75,7 +71,6 @@
   .inputRow button { width: auto; padding: 12px 20px; white-space: nowrap; }
   .loading { text-align:center; color:#cbb9ff; font-size: 13px; padding: 10px; }
 
-  /* Admin screen */
   #adminScreen { display:none; width:100%; max-width: 520px; }
   .adminBox { background: rgba(20,10,40,0.9); border-radius: 18px; border: 1px solid rgba(255,255,255,0.15); padding: 24px; }
   .adminBox h2 { font-size: 18px; margin-bottom: 16px; }
@@ -93,7 +88,6 @@
 </head>
 <body>
 
-  <!-- Login Screen -->
   <div class="card" id="loginScreen">
     <div class="logo">🐱 CAT <span>CLUB</span></div>
     <div class="sub">سجل دخولك بالإيميل والباسورد اللي معاك</div>
@@ -104,7 +98,6 @@
     <div class="linkLine"><a onclick="showAdminLogin()">دخول الأدمن</a></div>
   </div>
 
-  <!-- Admin login (password gate) -->
   <div class="card" id="adminLoginScreen" style="display:none;">
     <div class="logo">🔑 <span>ADMIN</span></div>
     <div class="sub">باسورد الأدمن</div>
@@ -114,7 +107,6 @@
     <div class="linkLine"><a onclick="backToLogin()">رجوع لتسجيل الدخول</a></div>
   </div>
 
-  <!-- Admin panel -->
   <div id="adminScreen">
     <div class="adminBox">
       <h2>لوحة تحكم <span>CAT CLUB</span></h2>
@@ -132,7 +124,6 @@
     </div>
   </div>
 
-  <!-- Chat Screen -->
   <div id="chatScreen">
     <div class="chatBox">
       <div class="chatHeader">
@@ -147,13 +138,31 @@
     </div>
   </div>
 
-<script>
-// IMPORTANT: only Ammar should know this. Change it any time by editing this constant.
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import {
+  getFirestore, collection, doc, getDoc, getDocs, setDoc, deleteDoc,
+  onSnapshot, query, orderBy, limit, serverTimestamp
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyDXa0Orfxu0aujl3DOYPy6ktR2v-UCCVsw",
+  authDomain: "cat-club-a3cd3.firebaseapp.com",
+  projectId: "cat-club-a3cd3",
+  storageBucket: "cat-club-a3cd3.firebasestorage.app",
+  messagingSenderId: "960443901199",
+  appId: "1:960443901199:web:35c2ac910b1aed04ba4a7a"
+};
+
+const app = initializeApp(firebaseConfig);
+const db = getFirestore(app);
+
+// IMPORTANT: only Ammar should know this.
 const ADMIN_PASSWORD = "eqrXUhazBxXct7";
 const DOMAIN = "@catclub";
 
 let currentUser = null;
-let pollInterval = null;
+let unsubscribeMessages = null;
 
 function escapeHtml(str) {
   const div = document.createElement('div');
@@ -170,22 +179,26 @@ function generatePassword(len = 10) {
   return pw;
 }
 
-async function getUsers() {
-  try {
-    const result = await window.storage.get('cat_club_allowed_users', true);
-    return result ? JSON.parse(result.value) : {};
-  } catch (e) {
-    return {};
-  }
+// ---------- Users collection ----------
+async function getAllUsers() {
+  const snap = await getDocs(collection(db, "users"));
+  const users = {};
+  snap.forEach(d => { users[d.id] = d.data(); });
+  return users;
 }
-async function saveUsers(users) {
-  const result = await window.storage.set('cat_club_allowed_users', JSON.stringify(users), true);
-  if (!result) throw new Error('فشل حفظ قائمة المستخدمين');
-  return result;
+async function getUser(email) {
+  const snap = await getDoc(doc(db, "users", email));
+  return snap.exists() ? snap.data() : null;
+}
+async function setUser(email, data) {
+  await setDoc(doc(db, "users", email), data);
+}
+async function removeUser(email) {
+  await deleteDoc(doc(db, "users", email));
 }
 
-// ---------- Regular login (only pre-added @catclub emails work) ----------
-async function handleLogin() {
+// ---------- Regular login ----------
+window.handleLogin = async function() {
   const btn = document.getElementById('loginBtn');
   const errorEl = document.getElementById('loginError');
   errorEl.textContent = '';
@@ -206,8 +219,7 @@ async function handleLogin() {
   btn.textContent = '...جاري التحقق';
 
   try {
-    const users = await getUsers();
-    const record = users[email];
+    const record = await getUser(email);
     if (!record || record.password !== password) {
       errorEl.textContent = 'الإيميل ده مش متسجل أو الباسورد غلط';
       return;
@@ -215,25 +227,26 @@ async function handleLogin() {
     currentUser = email;
     enterChat();
   } catch (e) {
-    errorEl.textContent = 'حصل خطأ، حاول تاني';
+    console.error(e);
+    errorEl.textContent = 'حصل خطأ في الاتصال، حاول تاني';
   } finally {
     btn.disabled = false;
     btn.textContent = 'دخول';
   }
-}
+};
 
 // ---------- Admin gate ----------
-function showAdminLogin() {
+window.showAdminLogin = function() {
   document.getElementById('loginScreen').style.display = 'none';
   document.getElementById('adminLoginScreen').style.display = 'block';
-}
-function backToLogin() {
+};
+window.backToLogin = function() {
   document.getElementById('adminLoginScreen').style.display = 'none';
   document.getElementById('loginScreen').style.display = 'block';
   document.getElementById('adminLoginError').textContent = '';
   document.getElementById('adminPassword').value = '';
-}
-function checkAdminPassword() {
+};
+window.checkAdminPassword = function() {
   const errorEl = document.getElementById('adminLoginError');
   const entered = document.getElementById('adminPassword').value;
   if (entered !== ADMIN_PASSWORD) {
@@ -243,17 +256,23 @@ function checkAdminPassword() {
   document.getElementById('adminLoginScreen').style.display = 'none';
   document.getElementById('adminScreen').style.display = 'block';
   loadUsersTable();
-}
-function adminLogout() {
+};
+window.adminLogout = function() {
   document.getElementById('adminScreen').style.display = 'none';
   document.getElementById('loginScreen').style.display = 'block';
   document.getElementById('adminPassword').value = '';
-}
+};
 
-// ---------- Admin panel logic ----------
+// ---------- Admin panel ----------
 async function loadUsersTable() {
-  const users = await getUsers();
-  renderUsersTable(users);
+  try {
+    const users = await getAllUsers();
+    renderUsersTable(users);
+  } catch (e) {
+    console.error(e);
+    document.getElementById('usersTableBody').innerHTML =
+      '<tr><td colspan="3" class="empty">حصل خطأ في تحميل البيانات</td></tr>';
+  }
 }
 
 function renderUsersTable(users) {
@@ -266,15 +285,27 @@ function renderUsersTable(users) {
   tbody.innerHTML = '';
   emails.forEach(email => {
     const tr = document.createElement('tr');
-    tr.innerHTML =
-      '<td>' + escapeHtml(email) + '</td>' +
-      '<td class="pw">' + escapeHtml(users[email].password) + '</td>' +
-      '<td><button class="delBtn" onclick="deleteEmail(\'' + email.replace(/'/g,"\\'") + '\')">حذف</button></td>';
+    const delBtn = document.createElement('button');
+    delBtn.className = 'delBtn';
+    delBtn.textContent = 'حذف';
+    delBtn.onclick = () => deleteEmail(email);
+
+    const tdEmail = document.createElement('td');
+    tdEmail.textContent = email;
+    const tdPw = document.createElement('td');
+    tdPw.className = 'pw';
+    tdPw.textContent = users[email].password;
+    const tdDel = document.createElement('td');
+    tdDel.appendChild(delBtn);
+
+    tr.appendChild(tdEmail);
+    tr.appendChild(tdPw);
+    tr.appendChild(tdDel);
     tbody.appendChild(tr);
   });
 }
 
-async function addEmail() {
+window.addEmail = async function() {
   const errorEl = document.getElementById('adminError');
   const okEl = document.getElementById('adminOk');
   const addBtn = document.getElementById('addEmailBtn');
@@ -283,7 +314,7 @@ async function addEmail() {
 
   const prefixInput = document.getElementById('newEmailPrefix');
   let prefix = prefixInput.value.trim().toLowerCase();
-  prefix = prefix.replace(/@.*$/, ''); // in case they typed the full domain too
+  prefix = prefix.replace(/@.*$/, '');
 
   if (!prefix) {
     errorEl.textContent = 'اكتب اسم قبل @catclub';
@@ -299,18 +330,17 @@ async function addEmail() {
 
   try {
     const email = prefix + DOMAIN;
-    const users = await getUsers();
-    if (users[email]) {
+    const existing = await getUser(email);
+    if (existing) {
       errorEl.textContent = 'الإيميل ده متضاف قبل كده';
       return;
     }
 
     const password = generatePassword(10);
-    users[email] = { password: password, createdAt: Date.now() };
-    await saveUsers(users);
+    await setUser(email, { password: password, createdAt: Date.now() });
     prefixInput.value = '';
     okEl.textContent = 'تم إضافة ' + email + ' — باسوردها: ' + password;
-    renderUsersTable(users);
+    loadUsersTable();
   } catch (e) {
     console.error('addEmail error:', e);
     errorEl.textContent = 'حصل خطأ في الحفظ، حاول تاني (' + (e.message || 'unknown') + ')';
@@ -318,41 +348,44 @@ async function addEmail() {
     addBtn.disabled = false;
     addBtn.textContent = 'إضافة + توليد باسورد';
   }
-}
+};
 
-async function deleteEmail(email) {
-  const users = await getUsers();
-  delete users[email];
-  await saveUsers(users);
-  renderUsersTable(users);
-}
+window.deleteEmail = async function(email) {
+  try {
+    await removeUser(email);
+    loadUsersTable();
+  } catch (e) {
+    console.error(e);
+  }
+};
 
 // ---------- Chat ----------
 function enterChat() {
   document.getElementById('loginScreen').style.display = 'none';
   document.getElementById('chatScreen').style.display = 'block';
-  loadMessages();
-  pollInterval = setInterval(loadMessages, 3000);
+  listenMessages();
 }
 
-function logout() {
+window.logout = function() {
   currentUser = null;
-  clearInterval(pollInterval);
+  if (unsubscribeMessages) unsubscribeMessages();
   document.getElementById('chatScreen').style.display = 'none';
   document.getElementById('loginScreen').style.display = 'block';
   document.getElementById('email').value = '';
   document.getElementById('password').value = '';
   document.getElementById('loginError').textContent = '';
-}
+};
 
-async function loadMessages() {
-  try {
-    const result = await window.storage.get('cat_club_messages', true);
-    const messages = result ? JSON.parse(result.value) : [];
+function listenMessages() {
+  const q = query(collection(db, "messages"), orderBy("time", "asc"), limit(200));
+  unsubscribeMessages = onSnapshot(q, (snapshot) => {
+    const messages = [];
+    snapshot.forEach(d => messages.push(d.data()));
     renderMessages(messages);
-  } catch (e) {
-    renderMessages([]);
-  }
+  }, (error) => {
+    console.error('listen error', error);
+    document.getElementById('messages').innerHTML = '<div class="loading">حصل خطأ في تحميل الرسائل</div>';
+  });
 }
 
 function renderMessages(messages) {
@@ -365,13 +398,17 @@ function renderMessages(messages) {
   messages.forEach(m => {
     const div = document.createElement('div');
     div.className = 'msg ' + (m.user === currentUser ? 'me' : 'other');
-    div.innerHTML = '<div class="name">' + escapeHtml(m.user) + '</div>' + escapeHtml(m.text);
+    const nameDiv = document.createElement('div');
+    nameDiv.className = 'name';
+    nameDiv.textContent = m.user;
+    div.appendChild(nameDiv);
+    div.appendChild(document.createTextNode(m.text));
     container.appendChild(div);
   });
   container.scrollTop = container.scrollHeight;
 }
 
-async function sendMessage() {
+window.sendMessage = async function() {
   const input = document.getElementById('msgInput');
   const text = input.value.trim();
   if (!text || !currentUser) return;
@@ -380,19 +417,12 @@ async function sendMessage() {
   input.disabled = true;
 
   try {
-    let messages = [];
-    try {
-      const result = await window.storage.get('cat_club_messages', true);
-      messages = result ? JSON.parse(result.value) : [];
-    } catch (e) {
-      messages = [];
-    }
-    messages.push({ user: currentUser, text: text, time: Date.now() });
-    if (messages.length > 200) messages.splice(0, messages.length - 200);
-
-    const saveResult = await window.storage.set('cat_club_messages', JSON.stringify(messages), true);
-    if (!saveResult) throw new Error('Save failed');
-    renderMessages(messages);
+    const msgId = Date.now().toString() + '-' + Math.random().toString(36).slice(2, 8);
+    await setDoc(doc(db, "messages", msgId), {
+      user: currentUser,
+      text: text,
+      time: Date.now()
+    });
   } catch (e) {
     console.error('Send error:', e);
     alert('حصل خطأ وإحنا بنبعت الرسالة، حاول تاني');
@@ -401,7 +431,7 @@ async function sendMessage() {
     input.disabled = false;
     input.focus();
   }
-}
+};
 </script>
 
 </body>
