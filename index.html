@@ -62,10 +62,44 @@
     padding: 6px 12px; width: auto; font-size: 12px; border-radius: 8px;
   }
   #messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
-  .msg { max-width: 75%; padding: 10px 14px; border-radius: 14px; font-size: 14px; line-height: 1.5; word-wrap: break-word; }
+  .msg { max-width: 75%; padding: 10px 14px; border-radius: 14px; font-size: 14px; line-height: 1.5; word-wrap: break-word; position: relative; }
   .msg .name { font-size: 11px; color: #ff9472; margin-bottom: 3px; font-weight: 700; }
   .msg.me { align-self: flex-start; background: linear-gradient(135deg, #ff6f91, #ff9472); color: #1f1147; }
   .msg.other { align-self: flex-end; background: rgba(255,255,255,0.1); color: #fff; }
+  .replyPreview {
+    font-size: 12px; opacity: 0.75; border-right: 3px solid rgba(0,0,0,0.3);
+    padding: 4px 8px; margin-bottom: 6px; border-radius: 6px; background: rgba(0,0,0,0.12); cursor: pointer;
+  }
+  .msg.other .replyPreview { border-right: none; border-left: 3px solid rgba(255,255,255,0.3); }
+  .msgActions { display:flex; gap: 6px; margin-top: 6px; align-items:center; flex-wrap: wrap; }
+  .actionBtn {
+    width:auto; padding: 2px 8px; font-size: 12px; background: rgba(0,0,0,0.15); color: inherit;
+    border: none; border-radius: 10px; cursor: pointer; opacity: 0.85;
+  }
+  .msg.other .actionBtn { background: rgba(255,255,255,0.12); }
+  .actionBtn:hover { opacity: 1; }
+  .reactionsRow { display:flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+  .reactionChip {
+    width:auto; font-size: 12px; padding: 2px 7px; border-radius: 10px; border: none;
+    background: rgba(0,0,0,0.18); color: inherit; cursor: pointer;
+  }
+  .msg.other .reactionChip { background: rgba(255,255,255,0.15); }
+  .reactionChip.mine { outline: 1px solid #ff9472; }
+  .emojiPicker {
+    display:none; position: absolute; top: -38px; background: #2b1758; border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 10px; padding: 4px 6px; gap: 4px; z-index: 5; box-shadow: 0 6px 16px rgba(0,0,0,0.4);
+  }
+  .msg.other .emojiPicker { right: 0; }
+  .msg.me .emojiPicker { left: 0; }
+  .emojiPicker.show { display:flex; }
+  .emojiPicker span { cursor: pointer; font-size: 16px; padding: 2px; }
+  .replyBar {
+    display:none; background: rgba(255,255,255,0.08); border-right: 3px solid #ff6f91;
+    padding: 8px 12px; margin: 0 14px; border-radius: 8px; font-size: 12px; color: #cbb9ff;
+    align-items: center; justify-content: space-between;
+  }
+  .replyBar.show { display:flex; }
+  .replyBar .cancelReply { width:auto; background:none; color:#ff8585; font-size: 16px; padding:0 6px; }
   .inputRow { display: flex; gap: 8px; padding: 14px; border-top: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.03); }
   .inputRow input { margin-bottom: 0; }
   .inputRow button { width: auto; padding: 12px 20px; white-space: nowrap; }
@@ -142,6 +176,10 @@
         <button class="logout" onclick="logout()">خروج</button>
       </div>
       <div id="messages"><div class="loading">جاري تحميل الرسائل...</div></div>
+      <div class="replyBar" id="replyBar">
+        <span id="replyBarText"></span>
+        <button class="cancelReply" onclick="cancelReply()">✕</button>
+      </div>
       <div class="inputRow">
         <input type="text" id="msgInput" placeholder="اكتب رسالتك..." onkeydown="if(event.key==='Enter') sendMessage()">
         <button onclick="sendMessage()">ارسال</button>
@@ -152,7 +190,7 @@
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import {
-  getFirestore, collection, doc, getDoc, getDocs, setDoc, deleteDoc,
+  getFirestore, collection, doc, getDoc, getDocs, setDoc, deleteDoc, updateDoc,
   onSnapshot, query, orderBy, limit, serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 
@@ -174,6 +212,9 @@ const DOMAIN = "@catclub";
 
 let currentUser = null;
 let unsubscribeMessages = null;
+let replyingTo = null; // { id, user, text }
+let latestMessages = [];
+const REACTION_EMOJIS = ["❤️", "😂", "👍", "😮", "😢", "🔥"];
 
 function escapeHtml(str) {
   const div = document.createElement('div');
@@ -428,11 +469,17 @@ async function tryRestoreSession() {
 }
 tryRestoreSession();
 
+document.addEventListener('click', (ev) => {
+  if (!ev.target.closest('.actionBtn') && !ev.target.closest('.emojiPicker')) {
+    document.querySelectorAll('.emojiPicker.show').forEach(p => p.classList.remove('show'));
+  }
+});
+
 function listenMessages() {
   const q = query(collection(db, "messages"), orderBy("time", "asc"), limit(200));
   unsubscribeMessages = onSnapshot(q, (snapshot) => {
     const messages = [];
-    snapshot.forEach(d => messages.push(d.data()));
+    snapshot.forEach(d => messages.push({ id: d.id, ...d.data() }));
     renderMessages(messages);
   }, (error) => {
     console.error('listen error', error);
@@ -441,23 +488,126 @@ function listenMessages() {
 }
 
 function renderMessages(messages) {
+  latestMessages = messages;
   const container = document.getElementById('messages');
   container.innerHTML = '';
   if (messages.length === 0) {
     container.innerHTML = '<div class="loading">لسه مفيش رسائل، ابدأ المحادثة!</div>';
     return;
   }
+  const byId = {};
+  messages.forEach(m => { byId[m.id] = m; });
+
   messages.forEach(m => {
     const div = document.createElement('div');
     div.className = 'msg ' + (m.user === currentUser ? 'me' : 'other');
+    div.dataset.id = m.id;
+
+    if (m.replyTo && byId[m.replyTo]) {
+      const parent = byId[m.replyTo];
+      const rp = document.createElement('div');
+      rp.className = 'replyPreview';
+      rp.textContent = parent.user + ': ' + parent.text.slice(0, 60);
+      rp.onclick = () => {
+        const target = container.querySelector('[data-id="' + m.replyTo + '"]');
+        if (target) target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      };
+      div.appendChild(rp);
+    } else if (m.replyTo) {
+      const rp = document.createElement('div');
+      rp.className = 'replyPreview';
+      rp.textContent = 'رسالة محذوفة';
+      div.appendChild(rp);
+    }
+
     const nameDiv = document.createElement('div');
     nameDiv.className = 'name';
     nameDiv.textContent = m.user;
     div.appendChild(nameDiv);
     div.appendChild(document.createTextNode(m.text));
+
+    // reactions row
+    const reactions = m.reactions || {};
+    const reactionsRow = document.createElement('div');
+    reactionsRow.className = 'reactionsRow';
+    Object.keys(reactions).forEach(emoji => {
+      const users = reactions[emoji] || [];
+      if (users.length === 0) return;
+      const chip = document.createElement('button');
+      chip.className = 'reactionChip' + (users.includes(currentUser) ? ' mine' : '');
+      chip.textContent = emoji + ' ' + users.length;
+      chip.onclick = () => toggleReaction(m.id, emoji);
+      reactionsRow.appendChild(chip);
+    });
+    if (reactionsRow.children.length > 0) div.appendChild(reactionsRow);
+
+    // actions: reply + react
+    const actions = document.createElement('div');
+    actions.className = 'msgActions';
+
+    const replyBtn = document.createElement('button');
+    replyBtn.className = 'actionBtn';
+    replyBtn.textContent = '↩ رد';
+    replyBtn.onclick = () => startReply(m.id, m.user, m.text);
+    actions.appendChild(replyBtn);
+
+    const reactBtn = document.createElement('button');
+    reactBtn.className = 'actionBtn';
+    reactBtn.textContent = '😀 تفاعل';
+    reactBtn.onclick = (ev) => {
+      ev.stopPropagation();
+      const picker = div.querySelector('.emojiPicker');
+      document.querySelectorAll('.emojiPicker.show').forEach(p => { if (p !== picker) p.classList.remove('show'); });
+      picker.classList.toggle('show');
+    };
+    actions.appendChild(reactBtn);
+    div.appendChild(actions);
+
+    // emoji picker
+    const picker = document.createElement('div');
+    picker.className = 'emojiPicker';
+    REACTION_EMOJIS.forEach(emoji => {
+      const span = document.createElement('span');
+      span.textContent = emoji;
+      span.onclick = () => { toggleReaction(m.id, emoji); picker.classList.remove('show'); };
+      picker.appendChild(span);
+    });
+    div.appendChild(picker);
+
     container.appendChild(div);
   });
   container.scrollTop = container.scrollHeight;
+}
+
+window.startReply = function(id, user, text) {
+  replyingTo = { id, user, text };
+  document.getElementById('replyBarText').textContent = 'بترد على ' + user + ': ' + text.slice(0, 50);
+  document.getElementById('replyBar').classList.add('show');
+  document.getElementById('msgInput').focus();
+};
+window.cancelReply = function() {
+  replyingTo = null;
+  document.getElementById('replyBar').classList.remove('show');
+};
+
+async function toggleReaction(msgId, emoji) {
+  if (!currentUser) return;
+  const msg = latestMessages.find(m => m.id === msgId);
+  if (!msg) return;
+  const reactions = msg.reactions ? JSON.parse(JSON.stringify(msg.reactions)) : {};
+  const users = reactions[emoji] || [];
+  const idx = users.indexOf(currentUser);
+  if (idx >= 0) {
+    users.splice(idx, 1);
+  } else {
+    users.push(currentUser);
+  }
+  reactions[emoji] = users;
+  try {
+    await updateDoc(doc(db, "messages", msgId), { reactions: reactions });
+  } catch (e) {
+    console.error('reaction error', e);
+  }
 }
 
 window.sendMessage = async function() {
@@ -470,11 +620,17 @@ window.sendMessage = async function() {
 
   try {
     const msgId = Date.now().toString() + '-' + Math.random().toString(36).slice(2, 8);
-    await setDoc(doc(db, "messages", msgId), {
+    const payload = {
       user: currentUser,
       text: text,
-      time: Date.now()
-    });
+      time: Date.now(),
+      reactions: {}
+    };
+    if (replyingTo) {
+      payload.replyTo = replyingTo.id;
+    }
+    await setDoc(doc(db, "messages", msgId), payload);
+    cancelReply();
   } catch (e) {
     console.error('Send error:', e);
     alert('حصل خطأ وإحنا بنبعت الرسالة، حاول تاني');
