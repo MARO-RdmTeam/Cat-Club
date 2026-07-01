@@ -122,7 +122,7 @@
       <div class="ok" id="adminOk"></div>
       <div class="addRow">
         <input type="text" id="newEmailPrefix" placeholder="اسم الإيميل (قبل @catclub)">
-        <button onclick="addEmail()">إضافة + توليد باسورد</button>
+        <button onclick="addEmail()" id="addEmailBtn">إضافة + توليد باسورد</button>
       </div>
       <table id="usersTable">
         <thead><tr><th>الإيميل</th><th>الباسورد</th><th></th></tr></thead>
@@ -179,7 +179,9 @@ async function getUsers() {
   }
 }
 async function saveUsers(users) {
-  await window.storage.set('cat_club_allowed_users', JSON.stringify(users), true);
+  const result = await window.storage.set('cat_club_allowed_users', JSON.stringify(users), true);
+  if (!result) throw new Error('فشل حفظ قائمة المستخدمين');
+  return result;
 }
 
 // ---------- Regular login (only pre-added @catclub emails work) ----------
@@ -275,6 +277,7 @@ function renderUsersTable(users) {
 async function addEmail() {
   const errorEl = document.getElementById('adminError');
   const okEl = document.getElementById('adminOk');
+  const addBtn = document.getElementById('addEmailBtn');
   errorEl.textContent = '';
   okEl.textContent = '';
 
@@ -291,19 +294,30 @@ async function addEmail() {
     return;
   }
 
-  const email = prefix + DOMAIN;
-  const users = await getUsers();
-  if (users[email]) {
-    errorEl.textContent = 'الإيميل ده متضاف قبل كده';
-    return;
-  }
+  addBtn.disabled = true;
+  addBtn.textContent = '...جاري الإضافة';
 
-  const password = generatePassword(10);
-  users[email] = { password: password, createdAt: Date.now() };
-  await saveUsers(users);
-  prefixInput.value = '';
-  okEl.textContent = 'تم إضافة ' + email + ' — باسوردها: ' + password;
-  renderUsersTable(users);
+  try {
+    const email = prefix + DOMAIN;
+    const users = await getUsers();
+    if (users[email]) {
+      errorEl.textContent = 'الإيميل ده متضاف قبل كده';
+      return;
+    }
+
+    const password = generatePassword(10);
+    users[email] = { password: password, createdAt: Date.now() };
+    await saveUsers(users);
+    prefixInput.value = '';
+    okEl.textContent = 'تم إضافة ' + email + ' — باسوردها: ' + password;
+    renderUsersTable(users);
+  } catch (e) {
+    console.error('addEmail error:', e);
+    errorEl.textContent = 'حصل خطأ في الحفظ، حاول تاني (' + (e.message || 'unknown') + ')';
+  } finally {
+    addBtn.disabled = false;
+    addBtn.textContent = 'إضافة + توليد باسورد';
+  }
 }
 
 async function deleteEmail(email) {
