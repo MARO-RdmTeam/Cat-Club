@@ -4,6 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>CAT CLUB</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="theme-color" content="#1f1147">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, sans-serif; }
   body {
@@ -103,6 +107,9 @@
   .inputRow { display: flex; gap: 8px; padding: 14px; border-top: 1px solid rgba(255,255,255,0.1); background: rgba(255,255,255,0.03); }
   .inputRow input { margin-bottom: 0; }
   .inputRow button { width: auto; padding: 12px 20px; white-space: nowrap; }
+  .imgBtn { width: auto; padding: 12px 14px; font-size: 18px; background: rgba(255,255,255,0.1); color: #fff; }
+  .msgImage { max-width: 100%; border-radius: 10px; margin-top: 6px; display:block; cursor: pointer; }
+  .uploadingNote { font-size: 12px; color: #cbb9ff; padding: 0 14px 8px; }
   .loading { text-align:center; color:#cbb9ff; font-size: 13px; padding: 10px; }
 
   #adminScreen { display:none; width:100%; max-width: 520px; }
@@ -181,6 +188,8 @@
         <button class="cancelReply" onclick="cancelReply()">✕</button>
       </div>
       <div class="inputRow">
+        <input type="file" id="imgInput" accept="image/*" style="display:none;" onchange="handleImageSelect(event)">
+        <button class="imgBtn" onclick="document.getElementById('imgInput').click()">📷</button>
         <input type="text" id="msgInput" placeholder="اكتب رسالتك..." onkeydown="if(event.key==='Enter') sendMessage()">
         <button onclick="sendMessage()">ارسال</button>
       </div>
@@ -214,6 +223,7 @@ let currentUser = null;
 let unsubscribeMessages = null;
 let replyingTo = null; // { id, user, text }
 let latestMessages = [];
+let pendingImage = null; // base64 dataURL
 const REACTION_EMOJIS = ["❤️", "😂", "👍", "😮", "😢", "🔥"];
 
 function escapeHtml(str) {
@@ -579,6 +589,37 @@ function renderMessages(messages) {
   container.scrollTop = container.scrollHeight;
 }
 
+window.handleImageSelect = function(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  if (!file.type.startsWith('image/')) {
+    alert('اختار ملف صورة بس');
+    return;
+  }
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    const img = new Image();
+    img.onload = () => {
+      const maxDim = 900;
+      let w = img.width, h = img.height;
+      if (w > maxDim || h > maxDim) {
+        if (w > h) { h = Math.round(h * (maxDim / w)); w = maxDim; }
+        else { w = Math.round(w * (maxDim / h)); h = maxDim; }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      pendingImage = canvas.toDataURL('image/jpeg', 0.6);
+      document.getElementById('replyBarText').textContent = '📷 صورة جاهزة للإرسال';
+      document.getElementById('replyBar').classList.add('show');
+    };
+    img.src = e.target.result;
+  };
+  reader.readAsDataURL(file);
+  event.target.value = '';
+};
 window.startReply = function(id, user, text) {
   replyingTo = { id, user, text };
   document.getElementById('replyBarText').textContent = 'بترد على ' + user + ': ' + text.slice(0, 50);
@@ -595,14 +636,25 @@ async function toggleReaction(msgId, emoji) {
   const msg = latestMessages.find(m => m.id === msgId);
   if (!msg) return;
   const reactions = msg.reactions ? JSON.parse(JSON.stringify(msg.reactions)) : {};
-  const users = reactions[emoji] || [];
-  const idx = users.indexOf(currentUser);
-  if (idx >= 0) {
-    users.splice(idx, 1);
-  } else {
-    users.push(currentUser);
+
+  // remove this user from ALL emojis first (one reaction per person)
+  let hadThisEmoji = false;
+  Object.keys(reactions).forEach(key => {
+    const users = reactions[key] || [];
+    const idx = users.indexOf(currentUser);
+    if (idx >= 0) {
+      if (key === emoji) hadThisEmoji = true;
+      users.splice(idx, 1);
+    }
+    reactions[key] = users;
+  });
+
+  // if they didn't already have this exact emoji, add it (toggle off if they did)
+  if (!hadThisEmoji) {
+    if (!reactions[emoji]) reactions[emoji] = [];
+    reactions[emoji].push(currentUser);
   }
-  reactions[emoji] = users;
+
   try {
     await updateDoc(doc(db, "messages", msgId), { reactions: reactions });
   } catch (e) {
@@ -642,5 +694,12 @@ window.sendMessage = async function() {
 };
 </script>
 
+<script>
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js').catch(err => console.log('SW failed:', err));
+  });
+}
+</script>
 </body>
 </html>
